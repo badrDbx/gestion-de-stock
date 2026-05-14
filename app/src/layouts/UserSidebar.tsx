@@ -1,20 +1,26 @@
-import { NavLink, useLocation, Link } from 'react-router-dom';
+import { NavLink, useLocation, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
+import api from '@/lib/api';
+import { toast } from 'sonner';
+
 import {
   LayoutDashboard,
   Package,
   ClipboardList,
-  RotateCcw,
+
   LogOut,
   Menu,
   Hospital,
   UserCircle,
-  Bell
+  MessageSquare,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
-import { useState } from 'react';
-import { mockBorrowedItems } from '@/data/mockData';
+import { useState, useEffect } from 'react';
+import { NotificationDrawer } from '@/components/NotificationDrawer';
+import { motion } from 'framer-motion';
 
 interface NavItem {
   label: string;
@@ -23,122 +29,215 @@ interface NavItem {
   badgeCount?: number;
 }
 
-// Dev mode: hardcoded staff profile
-const STAFF_USER = { id: '2', name: 'Badr DBX', role: 'user' as const, department: 'Service Sécurité Informatique' };
-
-function SidebarContent({ onItemClick }: { onItemClick?: () => void }) {
-  const { logout } = useAuth();
+function SidebarContent({ onItemClick, isCollapsed, setIsCollapsed, onOpenNotifications }: { onItemClick?: () => void; isCollapsed?: boolean; setIsCollapsed?: (val: boolean) => void; onOpenNotifications?: () => void }) {
+  const { user, logout } = useAuth();
   const location = useLocation();
-  const user = STAFF_USER;
+  const navigate = useNavigate();
+  
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
 
-  // Calculate items to return for this user
-  const borrowedCount = mockBorrowedItems.filter(b => b.userId === user.id && b.status === 'borrowed').length;
+  const [pendingCount, setPendingCount] = useState(0);
+  const [messageCount, setMessageCount] = useState(0);
+
+  useEffect(() => {
+    const fetchCounts = async () => {
+      if (!user) return;
+      try {
+        const [reqRes, msgRes] = await Promise.all([
+          api.get('/material-requests'),
+          api.get('/messages/total-unread', { params: { user_id: user.id } })
+        ]);
+        
+        const count = reqRes.data.filter(
+          (r: any) => String(r.userId) === String(user.id) && r.status === 'pending'
+        ).length;
+        
+        setPendingCount(count);
+        setMessageCount(msgRes.data.count || 0);
+      } catch (error) {
+        console.error('Error fetching counts:', error);
+      }
+    };
+    fetchCounts();
+    const interval = setInterval(fetchCounts, 30000);
+    
+    window.addEventListener('messages-read', fetchCounts);
+    
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('messages-read', fetchCounts);
+    };
+  }, [user]);
 
   const navItems: NavItem[] = [
     { label: 'Accueil', path: '/portal', icon: LayoutDashboard },
-    { label: 'Catalogue matériel', path: '/portal/catalog', icon: Package },
-    { label: 'Mes demandes', path: '/portal/my-requests', icon: ClipboardList },
-    { label: 'Mes retours à faire', path: '/portal/my-borrowed', icon: RotateCcw, badgeCount: borrowedCount },
+    { label: 'Catalogue Matériel', path: '/portal/catalog', icon: Package },
+    { label: 'Mes Demandes', path: '/portal/my-requests', icon: ClipboardList, badgeCount: pendingCount },
   ];
 
   return (
-    <div className="flex flex-col h-full bg-card dark:bg-[#121212] text-muted-foreground dark:text-[#A0A0A0] border-r border-border dark:border-[#2A2A2A]">
-      {/* Logo */}
-      <div className="flex items-center gap-3 px-5 border-b border-border dark:border-[#2A2A2A] bg-background dark:bg-[#0F0F0F] h-[61px]">
-        <div className="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center shadow-md shadow-blue-200">
-          <Hospital className="w-5 h-5 text-white" />
-        </div>
-        <div className="flex flex-col">
-          <span className="font-bold text-[14px] leading-tight text-foreground tracking-tight">chi smiya</span>
-          
-          {/* Elite Dev Mode Switcher */}
-          <div className="flex items-center gap-1 mt-1 p-0.5 bg-muted rounded-md border border-border/50 w-fit">
-            <Link 
-              to="/admin" 
-              className="px-1.5 py-0.5 text-[8px] font-black rounded-sm transition-all uppercase tracking-widest
-                text-muted-foreground hover:text-blue-600 hover:bg-card transition-colors"
-            >
-              Admin
-            </Link>
-            <Link 
-              to="/portal" 
-              className="px-1.5 py-0.5 text-[8px] font-black rounded-sm transition-all uppercase tracking-widest
-                bg-card text-emerald-600 shadow-sm border border-border"
-            >
-              User
-            </Link>
-          </div>
-        </div>
+    <div className="flex flex-col h-full bg-sidebar/80 backdrop-blur-xl text-sidebar-foreground border-r border-border/40 relative overflow-hidden transition-all duration-500">
+      {/* Background Decor */}
+      <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/5 rounded-full blur-[100px] -mr-32 -mt-32 pointer-events-none" />
+      <div className="absolute bottom-0 left-0 w-48 h-48 bg-indigo-500/5 rounded-full blur-[80px] -ml-24 -mb-24 pointer-events-none" />
+      
+      {/* Header / Logo */}
+      <div className="flex items-center justify-between px-7 h-[72px] shrink-0 relative z-10">
+        <motion.div 
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          className={`flex items-center gap-0 ${isCollapsed ? 'mx-auto' : ''} cursor-pointer group`}
+        >
+          <img 
+            src="/logo.png" 
+            alt="Logo" 
+            className={`${isCollapsed ? 'w-10 h-10' : 'w-12 h-12'} object-contain drop-shadow-xl transition-all duration-500 group-hover:rotate-12`} 
+          />
+          {!isCollapsed && (
+            <div className="flex flex-col -ml-1 translate-y-1.5 relative pr-2">
+              <span className="text-[20px] font-black italic bg-clip-text text-transparent bg-gradient-to-r from-[#4b69a7] to-[#2a3f6d] leading-none">
+                Stock
+              </span>
+            </div>
+          )}
+        </motion.div>
+        {!isCollapsed && setIsCollapsed && (
+          <button 
+            onClick={() => setIsCollapsed(true)} 
+            className="w-8 h-8 flex items-center justify-center rounded-[12px] hover:bg-muted/80 text-muted-foreground/40 hover:text-foreground transition-all duration-300 group/btn"
+          >
+            <ChevronLeft className="w-5 h-5 group-hover/btn:-translate-x-0.5 transition-transform" />
+          </button>
+        )}
       </div>
 
       {/* Main Navigation */}
-      <nav className="flex-1 px-4 py-8 space-y-1 overflow-y-auto">
-        <p className="px-4 mb-4 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Menu Principal</p>
-        {navItems.map(item => {
-          const Icon = item.icon;
-          const isActive = location.pathname === item.path;
-          return (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              onClick={onItemClick}
-              className={`flex items-start justify-between px-4 py-1.5 rounded-xl transition-all duration-200 group ${
-                isActive
-                  ? 'bg-indigo-600/10 text-indigo-400 font-semibold'
-                  : 'hover:bg-muted dark:hover:bg-[#252525] hover:text-foreground dark:hover:text-[#F5F5F5] border border-transparent'
-              }`}
+      <nav className="flex-1 px-4 py-8 space-y-2 overflow-y-auto relative z-10 scrollbar-hide">
+        {!isCollapsed && (
+          <p className="px-4 mb-6 text-[9px] font-black uppercase tracking-[0.3em] text-muted-foreground/30">Menu Principal</p>
+        )}
+        
+        {isCollapsed && setIsCollapsed && (
+          <div className="flex justify-center mb-8">
+            <button 
+              onClick={() => setIsCollapsed(false)} 
+              className="w-12 h-12 flex items-center justify-center rounded-2xl bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-500/20 transition-all duration-500 shadow-sm hover:scale-110 active:scale-95"
             >
-              <div className="flex items-start gap-3">
-                <Icon className={`w-5 h-5 ${isActive ? 'text-indigo-400' : 'text-muted-foreground dark:text-[#A0A0A0] group-hover:text-foreground dark:group-hover:text-[#F5F5F5]'}`} />
-                <span className="text-sm">{item.label}</span>
-              </div>
-              {item.badgeCount ? (
-                <div className="flex items-center justify-center h-5 px-2 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold ring-2 ring-white">
-                  {item.badgeCount}
+              <Menu className="w-5 h-5" />
+            </button>
+          </div>
+        )}
+
+        <div className="space-y-1.5">
+          {navItems.map(item => {
+            const Icon = item.icon;
+            const isActive = location.pathname === item.path;
+            
+            return (
+              <NavLink
+                key={item.path}
+                to={item.path}
+                onClick={onItemClick}
+                className={`flex items-center ${isCollapsed ? 'justify-center h-14' : 'justify-between px-4 py-3'} rounded-2xl transition-all duration-500 group relative ${
+                  isActive
+                    ? 'text-blue-600 dark:text-blue-400 font-bold'
+                    : 'text-muted-foreground hover:bg-muted/50 dark:hover:bg-white/5 hover:text-foreground'
+                }`}
+              >
+                <div className="flex items-center gap-4">
+                  <div className={`w-10 h-10 rounded-[14px] flex items-center justify-center transition-all duration-500 relative z-10 ${
+                    isActive 
+                      ? 'bg-blue-600 text-white shadow-[0_8px_20px_-6px_rgba(37,99,235,0.6)] rotate-3' 
+                      : 'bg-muted/80 dark:bg-white/5 group-hover:bg-white dark:group-hover:bg-white/10 group-hover:scale-110 group-hover:-rotate-3'
+                  }`}>
+                    <Icon className={`w-5 h-5 ${isActive ? 'text-white' : 'text-muted-foreground group-hover:text-foreground'}`} />
+                    {item.badgeCount ? (
+                      <span className={`absolute -top-1 -right-1 w-3.5 h-3.5 bg-indigo-500 rounded-full border-2 border-sidebar shadow-lg animate-pulse`} />
+                    ) : null}
+                  </div>
+                  {!isCollapsed && (
+                    <span className={`text-[14px] tracking-tight transition-colors duration-300 ${isActive ? 'font-black' : 'font-medium'}`}>
+                      {item.label}
+                    </span>
+                  )}
                 </div>
-              ) : null}
-            </NavLink>
-          );
-        })}
-      </nav>
 
-      {/* Support & Profile */}
-      <div className="p-6 border-t border-border space-y-4">
-        <button className="flex items-center gap-3 w-full px-4 py-3 rounded-xl bg-muted text-muted-foreground hover:bg-muted transition-colors">
-          <Bell className="w-5 h-5 text-muted-foreground" />
-          <span className="text-sm font-medium text-left flex-1">Notifications</span>
-          <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-        </button>
 
-        <div className="flex items-center gap-3 px-2 py-2 mb-2">
-          <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center border-border border-white shadow-sm">
-            <UserCircle className="w-7 h-7 text-blue-500 text-opacity-80" />
-          </div>
-          <div className="flex flex-col min-w-0">
-            <span className="font-bold text-sm text-foreground truncate">{user?.name}</span>
-          </div>
+
+                <div 
+                  className={`absolute inset-0 bg-blue-500/10 dark:bg-blue-400/10 rounded-2xl -z-10 transition-opacity duration-300 ease-in-out ${isActive ? 'opacity-100' : 'opacity-0'}`}
+                />
+              </NavLink>
+            );
+          })}
         </div>
 
-        <Button
-          variant="outline"
-          className="w-full justify-start gap-3 h-11 border-border text-muted-foreground hover:bg-red-50 hover:text-red-600 hover:border-red-100 rounded-xl transition-all"
-          onClick={logout}
-        >
-          <LogOut className="w-4 h-4" />
-          <span className="text-sm font-medium">Se déconnecter</span>
-        </Button>
+        {/* System & Support Section */}
+        <div className="pt-10 pb-2">
+          {!isCollapsed && (
+            <p className="px-4 mb-6 text-[9px] font-black uppercase tracking-[0.3em] text-muted-foreground/30">Communication</p>
+          )}
+          
+          <button
+            onClick={() => { onItemClick?.(); onOpenNotifications?.(); }}
+            className={`w-full flex items-center ${isCollapsed ? 'justify-center h-14' : 'justify-between px-4 py-3'} rounded-2xl transition-all duration-500 group relative text-muted-foreground hover:bg-muted/50 dark:hover:bg-white/5 hover:text-foreground`}
+          >
+            <div className="flex items-center gap-4">
+              <div className="w-10 h-10 rounded-[14px] bg-muted/80 dark:bg-white/5 flex items-center justify-center transition-all duration-500 group-hover:bg-white dark:group-hover:bg-white/10 group-hover:scale-110 shadow-sm relative">
+                <MessageSquare className="w-5 h-5" />
+                {messageCount > 0 && (
+                  <span className={`absolute -top-1 -right-1 w-3.5 h-3.5 bg-indigo-500 rounded-full border-2 border-sidebar shadow-lg animate-pulse`} />
+                )}
+              </div>
+            {!isCollapsed && <span className="text-[14px] font-medium tracking-tight">Messages</span>}
+          </div>
+        </button>
+        </div>
+      </nav>
+
+      {/* Footer / User Profile */}
+      <div className="p-5 relative z-10">
+        <div className={`bg-white/50 dark:bg-white/5 backdrop-blur-xl rounded-[28px] p-3 border border-border/40 shadow-xl shadow-black/5 transition-all duration-500 ${isCollapsed ? 'flex flex-col items-center gap-4 p-2' : ''}`}>
+          <div className={`flex items-center ${isCollapsed ? 'justify-center' : 'gap-4'} w-full mb-4`}>
+            <div className="relative shrink-0">
+              <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center border border-white/20 shadow-lg shadow-blue-500/20 group/avatar">
+                <UserCircle className="w-7 h-7 text-white transition-transform duration-500 group-hover/avatar:scale-110" />
+              </div>
+              <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 bg-emerald-500 border-2 border-white dark:border-slate-900 rounded-full shadow-md" />
+            </div>
+            {!isCollapsed && (
+              <div className="flex flex-col min-w-0 flex-1">
+                <span className="font-black text-[14px] text-foreground tracking-tight truncate uppercase leading-none mb-1">{user?.name}</span>
+                <span className="text-[9px] font-bold text-muted-foreground/60 uppercase tracking-widest truncate">{user?.role}</span>
+              </div>
+            )}
+          </div>
+
+          <Button
+            variant="ghost"
+            onClick={handleLogout}
+            className={`w-full ${isCollapsed ? 'h-11 w-11 px-0' : 'h-11 px-4 justify-start gap-3'} rounded-2xl text-muted-foreground hover:text-red-500 hover:bg-red-500/10 transition-all duration-300 border border-transparent hover:border-red-500/20 group/logout`}
+          >
+            <LogOut className={`w-4 h-4 shrink-0 transition-transform ${isCollapsed ? '' : 'group-hover/logout:-translate-x-1'}`} />
+            {!isCollapsed && <span className="text-[11px] font-black uppercase tracking-widest">Déconnexion</span>}
+          </Button>
+        </div>
       </div>
     </div>
   );
 }
 
-export function UserSidebar() {
+export function UserSidebar({ isCollapsed, setIsCollapsed }: { isCollapsed?: boolean; setIsCollapsed?: (val: boolean) => void }) {
   const [open, setOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   return (
     <>
-      <aside className="hidden lg:flex w-72 flex-col h-screen fixed top-0 left-0 z-40 bg-card dark:bg-[#121212]">
-        <SidebarContent />
+      <aside className={`hidden lg:flex flex-col h-screen fixed top-0 left-0 z-40 bg-sidebar border-r border-border shadow-sm transition-[width] duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)] ${isCollapsed ? 'w-20' : 'w-72'}`}>
+        <SidebarContent isCollapsed={isCollapsed} setIsCollapsed={setIsCollapsed} onOpenNotifications={() => setNotificationsOpen(true)} />
       </aside>
 
       <Sheet open={open} onOpenChange={setOpen}>
@@ -148,9 +247,11 @@ export function UserSidebar() {
           </Button>
         </SheetTrigger>
         <SheetContent side="left" className="w-72 p-0 border-r border-border">
-          <SidebarContent onItemClick={() => setOpen(false)} />
+          <SidebarContent onItemClick={() => setOpen(false)} onOpenNotifications={() => { setOpen(false); setNotificationsOpen(true); }} />
         </SheetContent>
       </Sheet>
+
+      <NotificationDrawer open={notificationsOpen} onOpenChange={setNotificationsOpen} sidebarOffset={isCollapsed ? 80 : 288} />
     </>
   );
 }

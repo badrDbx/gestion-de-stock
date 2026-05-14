@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 import { Header } from '@/layouts/Header';
-import { mockMaterials } from '@/data/mockData';
+import api from '@/lib/api';
 import type { Material, MaterialType, MaterialCategory } from '@/types';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -19,6 +20,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -46,58 +48,100 @@ import {
   Package,
   AlertTriangle,
   Filter,
+  Save,
+  X,
+  ShieldAlert,
+  Tag,
+  Hash,
+  Layers,
+  FileText,
 } from 'lucide-react';
+import { motion } from 'framer-motion';
 import { useAuth } from '@/context/AuthContext';
 
 export function Materials() {
   const { user } = useAuth();
-  const isAdmin = user?.role === 'admin';
-  const [materials, setMaterials] = useState<Material[]>(mockMaterials);
+  const [materials, setMaterials] = useState<Material[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<MaterialType | 'all'>('all');
+
+  // Edit/Add dialog state
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingMaterial, setEditingMaterial] = useState<Material | null>(null);
 
-  // نموذج المادة
+  // Delete dialog state
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [deletingMaterial, setDeletingMaterial] = useState<Material | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  useEffect(() => {
+    fetchMaterials();
+  }, []);
+
+  const fetchMaterials = async () => {
+    try {
+      setLoading(true);
+      const { data } = await api.get('/materials');
+      setMaterials(data);
+    } catch (error) {
+      console.error('Error fetching materials:', error);
+    } finally {
+      setTimeout(() => setLoading(false), 300);
+    }
+  };
+
+  const MaterialsSkeleton = () => (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
+        <div className="h-10 w-64 bg-slate-100 dark:bg-slate-800 rounded-lg animate-pulse" />
+        <div className="h-10 w-32 bg-slate-100 dark:bg-slate-800 rounded-lg animate-pulse" />
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {[...Array(6)].map((_, i) => (
+          <div key={i} className="h-48 rounded-[24px] bg-slate-100 dark:bg-slate-800 animate-pulse" />
+        ))}
+      </div>
+    </div>
+  );
+
   const [formData, setFormData] = useState<Partial<Material>>({
     name: '',
     description: '',
     type: 'consumable',
     category: 'Informatique',
-    quantity: 0,
-    minQuantity: 0,
+    quantity: 1,
+    minQuantity: 5,
     unit: 'Pièce',
     image: '',
   });
 
   const filteredMaterials = materials.filter(material => {
-    const matchesSearch = material.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         material.description.toLowerCase().includes(searchQuery.toLowerCase());
+    const name = material.name || '';
+    const description = material.description || '';
+    const matchesSearch = name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         description.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesType = typeFilter === 'all' || material.type === typeFilter;
     return matchesSearch && matchesType;
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (editingMaterial) {
-      // تحديث مادة موجودة
-      setMaterials(materials.map(m =>
-        m.id === editingMaterial.id
-          ? { ...m, ...formData, updatedAt: new Date().toISOString() } as Material
-          : m
-      ));
-    } else {
-      // إضافة مادة جديدة
-      const newMaterial: Material = {
-        ...formData as Material,
-        id: Date.now().toString(),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      setMaterials([...materials, newMaterial]);
+    try {
+      if (editingMaterial) {
+        await api.put(`/materials/${editingMaterial.id}`, formData);
+        toast.success('Article modifié avec succès');
+      } else {
+        await api.post('/materials', formData);
+        toast.success('Article ajouté avec succès');
+      }
+      fetchMaterials();
+      setIsDialogOpen(false);
+      resetForm();
+    } catch (error) {
+      console.error('Error saving material:', error);
+      toast.error('Erreur lors de la sauvegarde. Vérifiez que MySQL est démarré.');
     }
-    setIsDialogOpen(false);
-    resetForm();
   };
 
   const handleEdit = (material: Material) => {
@@ -106,9 +150,25 @@ export function Materials() {
     setIsDialogOpen(true);
   };
 
-  const handleDelete = (id: string) => {
-    if (confirm('Êtes-vous sûr de vouloir supprimer cet article ?')) {
-      setMaterials(materials.filter(m => m.id !== id));
+  const confirmDelete = (material: Material) => {
+    setDeletingMaterial(material);
+    setIsDeleteDialogOpen(true);
+  };
+
+  const handleDelete = async () => {
+    if (!deletingMaterial) return;
+    setIsDeleting(true);
+    try {
+      await api.delete(`/materials/${deletingMaterial.id}`);
+      toast.success(`"${deletingMaterial.name}" a été supprimé.`);
+      fetchMaterials();
+      setIsDeleteDialogOpen(false);
+      setDeletingMaterial(null);
+    } catch (error) {
+      console.error('Error deleting material:', error);
+      toast.error('Erreur lors de la suppression.');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -119,8 +179,8 @@ export function Materials() {
       description: '',
       type: 'consumable',
       category: 'Informatique',
-      quantity: 0,
-      minQuantity: 0,
+      quantity: 1,
+      minQuantity: 5,
       unit: 'Pièce',
       image: '',
     });
@@ -132,7 +192,7 @@ export function Materials() {
   };
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
+    <div className="flex-1 flex flex-col min-h-0 bg-background">
       <Header 
         title="Gestion du Matériel" 
         actions={
@@ -147,33 +207,36 @@ export function Materials() {
               />
             </div>
             <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v as MaterialType | 'all')}>
-              <SelectTrigger className="w-36 h-9 bg-muted border-border">
-                <div className="flex items-center gap-2">
-                  <Filter className="w-3.5 h-3.5 text-muted-foreground" />
-                  <SelectValue placeholder="Type" />
+              <SelectTrigger className="w-auto min-w-[144px] h-9 bg-muted border-border px-3 overflow-hidden">
+                <div className="flex items-center gap-2 truncate">
+                  <Filter className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                  <SelectValue placeholder="Type" className="truncate" />
                 </div>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">Tous</SelectItem>
-                <SelectItem value="consumable">Consommable</SelectItem>
-                <SelectItem value="returnable">Retournable</SelectItem>
+                <SelectItem value="all">Tous les types</SelectItem>
+                <SelectItem value="consumable">Consommables</SelectItem>
+                <SelectItem value="returnable">Retournables</SelectItem>
               </SelectContent>
             </Select>
           </div>
         }
         primaryAction={
-          isAdmin && (
-            <Button onClick={openAddDialog} className="h-9 gap-2 shadow-sm font-semibold">
-              <Plus className="w-4 h-4" />
-              Ajouter un article
-            </Button>
-          )
+          <Button onClick={openAddDialog} className="h-9 gap-2 shadow-sm font-semibold">
+            <Plus className="w-4 h-4" />
+            Ajouter un article
+          </Button>
         }
       />
 
-      <div className="flex-1 p-6 space-y-6 overflow-auto">
-        {/* Materials Table */}
-        <Card>
+      <motion.div 
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+        className="flex-1 p-6 space-y-6 overflow-auto"
+      >
+        {loading ? <MaterialsSkeleton /> : (
+          <Card className="border border-border/50 rounded-2xl overflow-hidden bg-card/50 backdrop-blur-sm">
           <CardContent className="p-0">
             <Table>
               <TableHeader>
@@ -184,12 +247,12 @@ export function Materials() {
                   <TableHead>Quantité</TableHead>
                   <TableHead>Unité</TableHead>
                   <TableHead>Statut</TableHead>
-                  {isAdmin && <TableHead className="w-12"></TableHead>}
+                  <TableHead className="w-14 text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredMaterials.map(material => (
-                  <TableRow key={material.id}>
+                  <TableRow key={material.id} className="group">
                     <TableCell>
                       <div className="flex flex-col min-w-0">
                         <p className="font-medium truncate">{material.name}</p>
@@ -197,33 +260,18 @@ export function Materials() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      {(() => {
-                        const categoryColors: Record<string, string> = {
-                          'Informatique':           'bg-blue-500/10 text-blue-400 border-blue-500/20',
-                          'Impression':             'bg-purple-500/10 text-purple-400 border-purple-500/20',
-                          'Bureautique':            'bg-orange-500/10 text-orange-400 border-orange-500/20',
-                          'Réseau & Câblage':      'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
-                          'Audiovisuel':            'bg-pink-500/10 text-pink-400 border-pink-500/20',
-                          'Téléphonie':             'bg-emerald-500/10 text-emerald-500 border-emerald-500/20',
-                          'Stockage & Sauvegarde':  'bg-indigo-500/10 text-indigo-400 border-indigo-500/20',
-                          'Protection & Sécurité': 'bg-red-500/10 text-red-500 border-red-500/20',
-                          'Énergie & Alimentation': 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20',
-                          'Mobilier':               'bg-slate-100 text-slate-500 border-slate-200 dark:bg-[#252525] dark:text-[#A0A0A0] dark:border-[#2A2A2A]',
-                          'Hygiène & Santé':        'bg-teal-500/10 text-teal-400 border-teal-500/20',
-                          'Consommables Divers':    'bg-slate-100 text-slate-500 border-slate-200 dark:bg-[#252525] dark:text-[#A0A0A0] dark:border-[#2A2A2A]',
-                        };
-                        const cls = categoryColors[material.category] || 'bg-muted text-foreground border-border';
-                        return (
-                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${cls}`}>
-                            {material.category}
-                          </span>
-                        );
-                      })()}
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700">
+                        {material.category}
+                      </span>
                     </TableCell>
                     <TableCell>
-                      <Badge variant={material.type === 'consumable' ? 'secondary' : 'outline'}>
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider border ${
+                        material.type === 'consumable' 
+                          ? 'bg-sky-500/10 text-sky-600 border-sky-500/20 dark:text-sky-400' 
+                          : 'bg-red-500/10 text-red-600 border-red-500/20 dark:text-red-400'
+                      }`}>
                         {material.type === 'consumable' ? 'Consommable' : 'Retournable'}
-                      </Badge>
+                      </span>
                     </TableCell>
                     <TableCell>
                       <span className="font-medium">{material.quantity}</span>
@@ -231,81 +279,100 @@ export function Materials() {
                     <TableCell>{material.unit}</TableCell>
                     <TableCell>
                       {material.quantity === 0 ? (
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-500/10 text-red-500 border border-red-500/20">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-red-500/10 text-red-500 border border-red-500/20">
+                          <ShieldAlert className="w-3 h-3" />
                           Critique
                         </span>
                       ) : material.quantity <= material.minQuantity ? (
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                          <AlertTriangle className="w-3 h-3" />
                           Bas
                         </span>
                       ) : (
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                          OK
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                          En Stock
                         </span>
                       )}
                     </TableCell>
-                    {isAdmin && (
-                      <TableCell>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon">
-                              <MoreVertical className="w-4 h-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => handleEdit(material)}>
-                              <Edit className="w-4 h-4 mr-2" />
-                              Modifier
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => handleDelete(material.id)}
-                              className="text-destructive"
-                            >
-                              <Trash2 className="w-4 h-4 mr-2" />
-                              Supprimer
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </TableCell>
-                    )}
+                    <TableCell className="text-right">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="hover:bg-muted">
+                            <MoreVertical className="w-4 h-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-44">
+                          <DropdownMenuItem onClick={() => handleEdit(material)} className="gap-2 cursor-pointer">
+                            <Edit className="w-4 h-4 text-indigo-500" />
+                            <span>Modifier</span>
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onClick={() => confirmDelete(material)}
+                            className="gap-2 cursor-pointer text-red-500 focus:text-red-500 focus:bg-red-500/10"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            <span>Supprimer</span>
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           </CardContent>
         </Card>
-      </div>
+        )}
+      </motion.div>
 
-      {/* Add/Edit Dialog */}
-      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>
-              {editingMaterial ? 'Modifier l\'article' : 'Ajouter un nouvel article'}
-            </DialogTitle>
-            <DialogDescription>
-              Entrez les informations de l'article ci-dessous
-            </DialogDescription>
-          </DialogHeader>
+      {/* ─── ADD / EDIT DIALOG ─── */}
+      <Dialog open={isDialogOpen} onOpenChange={(open) => { setIsDialogOpen(open); if (!open) resetForm(); }}>
+        <DialogContent className="max-w-xl p-0 overflow-hidden gap-0 bg-white dark:bg-[#121212] border-border/50 shadow-2xl">
+          {/* Colored header band */}
+          <div className={`px-6 py-5 ${editingMaterial ? 'bg-indigo-600' : 'bg-gradient-to-r from-indigo-600 to-violet-600'}`}>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+                {editingMaterial ? <Edit className="w-5 h-5 text-white" /> : <Package className="w-5 h-5 text-white" />}
+              </div>
+              <div>
+                <DialogTitle className="text-white text-lg font-black">
+                  {editingMaterial ? 'Modifier l\'article' : 'Ajouter un article'}
+                </DialogTitle>
+                <DialogDescription className="text-white/70 text-xs mt-0.5">
+                  {editingMaterial ? `Modification de "${editingMaterial.name}"` : 'Remplissez les informations du nouvel article'}
+                </DialogDescription>
+              </div>
+            </div>
+          </div>
+
           <form onSubmit={handleSubmit}>
-            <div className="space-y-4 py-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="name">Nom de l'article</Label>
+            <div className="px-6 py-5 space-y-5">
+
+              {/* Row: Name + Type */}
+              <div className="grid grid-cols-5 gap-4">
+                <div className="col-span-3 space-y-1.5">
+                  <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5" /> Nom de l'article
+                  </Label>
                   <Input
                     id="name"
+                    placeholder="Ex: Souris USB, Papier A4…"
                     value={formData.name}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                     required
+                    className="h-10"
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="type">Type</Label>
+                <div className="col-span-2 space-y-1.5">
+                  <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5" /> Type
+                  </Label>
                   <Select
                     value={formData.type}
                     onValueChange={(v) => setFormData({ ...formData, type: v as MaterialType })}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger className="h-10">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -315,13 +382,17 @@ export function Materials() {
                   </Select>
                 </div>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="category">Catégorie</Label>
+
+              {/* Category */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                  <Tag className="w-3.5 h-3.5" /> Catégorie
+                </Label>
                 <Select
                   value={formData.category}
                   onValueChange={(v) => setFormData({ ...formData, category: v as MaterialCategory })}
                 >
-                  <SelectTrigger id="category">
+                  <SelectTrigger id="category" className="h-10">
                     <SelectValue placeholder="Sélectionner une catégorie" />
                   </SelectTrigger>
                   <SelectContent>
@@ -340,97 +411,175 @@ export function Materials() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="description">Description</Label>
+
+              {/* Description */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5" /> Description
+                </Label>
                 <Input
                   id="description"
+                  placeholder="Brève description de l'article…"
                   value={formData.description}
                   onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                  required
+                  className="h-10"
                 />
               </div>
+
+              {/* Row: Quantity + Unit */}
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="quantity">Quantité Initiale</Label>
-                  <div className="flex items-center w-full bg-card border border-border shadow-sm rounded-md overflow-hidden focus-within:ring-1 focus-within:ring-slate-300 focus-within:border-slate-300 transition-all">
-                    <button
-                      type="button"
-                      onClick={() => setFormData({ ...formData, quantity: Math.max(0, (formData.quantity || 0) - 1) })}
-                      className="px-3 py-2 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors border-r border-border outline-none"
-                    >
-                      <Minus className="w-4 h-4" />
-                    </button>
-                    <input
-                      id="quantity"
-                      type="number"
-                      value={formData.quantity === undefined ? 0 : formData.quantity}
-                      onChange={(e) => setFormData({ ...formData, quantity: Math.max(0, parseInt(e.target.value) || 0) })}
-                      className="flex-1 w-full text-center font-bold text-foreground text-sm py-2 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                      required
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setFormData({ ...formData, quantity: (formData.quantity || 0) + 1 })}
-                      className="px-3 py-2 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors border-l border-border outline-none"
-                    >
-                      <Plus className="w-4 h-4" />
-                    </button>
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                    <Hash className="w-3.5 h-3.5" /> Quantité
+                  </Label>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between bg-slate-100 dark:bg-[#1a1a1a] p-1 rounded-xl border border-border/50 shadow-inner">
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, quantity: Math.max(0, (Number(formData.quantity) || 0) - 1) })}
+                        className="w-9 h-9 rounded-lg bg-white dark:bg-[#2a2a2a] shadow-sm text-slate-400 hover:text-red-500 hover:shadow-md flex items-center justify-center transition-all focus:outline-none focus:ring-2 focus:ring-red-500/50 active:scale-95"
+                      >
+                        <Minus className="w-4 h-4" />
+                      </button>
+                      <input
+                        id="quantity"
+                        type="number"
+                        value={formData.quantity === undefined ? '' : formData.quantity}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFormData({ ...formData, quantity: val === '' ? '' as any : Math.max(0, parseInt(val)) });
+                        }}
+                        className="w-full bg-transparent text-center text-xl font-black text-foreground focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, quantity: (Number(formData.quantity) || 0) + 1 })}
+                        className="w-9 h-9 rounded-lg bg-white dark:bg-[#2a2a2a] shadow-sm text-slate-400 hover:text-emerald-500 hover:shadow-md flex items-center justify-center transition-all focus:outline-none focus:ring-2 focus:ring-emerald-500/50 active:scale-95"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="unit">Unité (ex: Pièce, Rame)</Label>
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                    <Tag className="w-3.5 h-3.5" /> Unité
+                  </Label>
                   <Input
                     id="unit"
+                    placeholder="Pièce, Rame, Boîte…"
                     value={formData.unit}
                     onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
+                    className="h-10"
                     required
                   />
                 </div>
               </div>
 
-              {/* Advanced Setting: Alert Threshold */}
-              <div className="pt-4 mt-2 border-t border-border flex items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <Label className="text-foreground font-bold flex items-center gap-2">
-                    <AlertTriangle className="w-4 h-4 text-amber-500" />
-                    Seuil d'alerte critique
+              {/* Alert Threshold */}
+              <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded-xl p-4 flex items-center justify-between gap-4 transition-all focus-within:ring-2 focus-within:ring-amber-500/40 focus-within:border-amber-400">
+                <div className="space-y-0.5">
+                  <Label className="text-sm font-bold text-amber-900 dark:text-amber-500 flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-500" />
+                    Seuil d'alerte (Stock Bas)
                   </Label>
-                  <p className="text-xs text-muted-foreground max-w-[280px] leading-relaxed">
-                    Définit la quantité minimale pour déclencher un statut 'Bas' ou 'Critique'.
+                  <p className="text-xs text-amber-700/80 dark:text-amber-400/80 leading-relaxed">
+                    Quantité minimale à partir de laquelle le stock est considéré comme "Bas".
                   </p>
                 </div>
-                
-                <div className="flex items-center bg-card border border-border rounded-lg overflow-hidden shrink-0 shadow-sm">
+                <div className="flex items-center justify-between bg-white dark:bg-[#1a1a1a] p-1 rounded-xl border border-amber-200 dark:border-amber-500/30 shadow-sm shrink-0">
                   <button
                     type="button"
-                    onClick={() => setFormData({ ...formData, minQuantity: Math.max(0, (formData.minQuantity || 0) - 1) })}
-                    className="px-3 py-2 text-muted-foreground hover:bg-muted border-r border-border transition-colors outline-none"
+                    onClick={() => setFormData({ ...formData, minQuantity: Math.max(0, (Number(formData.minQuantity) || 0) - 1) })}
+                    className="w-8 h-8 rounded-lg bg-amber-50 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 hover:bg-amber-100 hover:text-amber-700 flex items-center justify-center transition-all focus:outline-none focus:ring-2 focus:ring-amber-500/50 active:scale-95"
                   >
-                    <Minus className="w-4 h-4" />
+                    <Minus className="w-3.5 h-3.5" />
                   </button>
-                  <div className="w-12 text-center font-bold text-foreground text-sm">
-                    {formData.minQuantity}
-                  </div>
+                  <input
+                    id="minQuantity"
+                    type="number"
+                    value={formData.minQuantity === undefined ? '' : formData.minQuantity}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFormData({ ...formData, minQuantity: val === '' ? '' as any : Math.max(0, parseInt(val)) });
+                    }}
+                    className="w-12 bg-transparent text-center text-base font-black text-amber-950 dark:text-amber-100 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    required
+                  />
                   <button
                     type="button"
-                    onClick={() => setFormData({ ...formData, minQuantity: (formData.minQuantity || 0) + 1 })}
-                    className="px-3 py-2 text-muted-foreground hover:bg-muted border-l border-border transition-colors outline-none"
+                    onClick={() => setFormData({ ...formData, minQuantity: (Number(formData.minQuantity) || 0) + 1 })}
+                    className="w-8 h-8 rounded-lg bg-amber-50 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 hover:bg-amber-100 hover:text-amber-700 flex items-center justify-center transition-all focus:outline-none focus:ring-2 focus:ring-amber-500/50 active:scale-95"
                   >
-                    <Plus className="w-4 h-4" />
+                    <Plus className="w-3.5 h-3.5" />
                   </button>
                 </div>
               </div>
-
             </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+
+            <DialogFooter className="px-6 py-4 bg-muted/30 border-t border-border gap-2">
+              <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)} className="gap-2">
+                <X className="w-4 h-4" />
                 Annuler
               </Button>
-              <Button type="submit">
+              <Button type="submit" className="gap-2 min-w-[130px]">
+                <Save className="w-4 h-4" />
                 {editingMaterial ? 'Enregistrer' : 'Ajouter'}
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── DELETE CONFIRMATION DIALOG ─── */}
+      <Dialog open={isDeleteDialogOpen} onOpenChange={(open) => { if (!isDeleting) { setIsDeleteDialogOpen(open); if (!open) setDeletingMaterial(null); } }}>
+        <DialogContent className="max-w-sm p-0 overflow-hidden gap-0 bg-white dark:bg-[#121212] shadow-2xl border-border/50">
+          <div className="bg-red-500/10 px-6 py-5 flex items-center gap-4 border-b border-red-500/20">
+            <div className="w-12 h-12 rounded-full bg-red-500/15 flex items-center justify-center shrink-0">
+              <ShieldAlert className="w-6 h-6 text-red-500" />
+            </div>
+            <div>
+              <DialogTitle className="text-base font-black text-foreground">Confirmer la suppression</DialogTitle>
+              <DialogDescription className="text-xs text-muted-foreground mt-0.5">
+                Cette action est irréversible.
+              </DialogDescription>
+            </div>
+          </div>
+          <div className="px-6 py-5 space-y-3">
+            <p className="text-sm text-foreground">
+              Vous allez supprimer l'article :
+            </p>
+            <div className="bg-muted/50 border border-border rounded-lg px-4 py-3 flex items-center gap-3">
+              <Package className="w-5 h-5 text-red-500 shrink-0" />
+              <div>
+                <p className="font-bold text-sm text-foreground">{deletingMaterial?.name}</p>
+                <p className="text-xs text-muted-foreground">{deletingMaterial?.category} · {deletingMaterial?.quantity} {deletingMaterial?.unit}</p>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Toutes les données associées à cet article seront définitivement perdues.
+            </p>
+          </div>
+          <DialogFooter className="px-6 py-4 bg-muted/30 border-t border-border gap-2">
+            <Button
+              variant="outline"
+              onClick={() => { setIsDeleteDialogOpen(false); setDeletingMaterial(null); }}
+              disabled={isDeleting}
+              className="flex-1"
+            >
+              Annuler
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDelete}
+              disabled={isDeleting}
+              className="flex-1 gap-2"
+            >
+              <Trash2 className="w-4 h-4" />
+              {isDeleting ? 'Suppression…' : 'Supprimer'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

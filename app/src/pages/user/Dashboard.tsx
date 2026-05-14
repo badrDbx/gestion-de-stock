@@ -1,16 +1,66 @@
+import { useState, useEffect } from 'react';
 import { Header } from '@/layouts/Header';
 import { Card, CardContent } from '@/components/ui/card';
-import { mockRequests, mockBorrowedItems, mockMaterials } from '@/data/mockData';
+import api from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
+import type { Material, MaterialRequest } from '@/types';
 import { Package, ClipboardList, RotateCcw, ArrowUpRight, Clock, CheckCircle2, Calendar, AlertCircle, Activity } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { motion } from 'framer-motion';
 
 export function Dashboard() {
-  const myRequests = mockRequests.filter(r => r.userId === '2');
+  const { user } = useAuth();
+  const [materials, setMaterials] = useState<Material[]>([]);
+  const [requests, setRequests] = useState<MaterialRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (user) {
+      fetchDashboardData();
+    }
+  }, [user]);
+
+  const fetchDashboardData = async () => {
+    try {
+      const [matRes, reqRes] = await Promise.all([
+        api.get('/materials'),
+        api.get('/material-requests'),
+      ]);
+      const dataMat = Array.isArray(matRes.data) ? matRes.data : [];
+      const dataReq = Array.isArray(reqRes.data) ? reqRes.data : [];
+      
+      setMaterials(dataMat);
+      setRequests(dataReq);
+    } catch (error) {
+      console.error('Error fetching user dashboard data:', error);
+    } finally {
+      setTimeout(() => setLoading(false), 300);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex-1 flex flex-col min-h-0 bg-background">
+        <Header title={`Bienvenue...`} />
+        <div className="flex-1 p-6 space-y-6 overflow-hidden">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+            {[...Array(4)].map((_, i) => (
+              <div key={i} className="h-32 rounded-[24px] bg-slate-100 dark:bg-slate-800 animate-pulse" />
+            ))}
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div className="h-64 rounded-[24px] bg-slate-100 dark:bg-slate-800 animate-pulse" />
+            <div className="h-64 rounded-[24px] bg-slate-100 dark:bg-slate-800 animate-pulse" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const myRequests = requests.filter(r => String(r.userId) === String(user?.id));
   const myPending = myRequests.filter(r => r.status === 'pending').length;
-  const myApproved = myRequests.filter(r => r.status === 'approved').length;
-  const myDelivered = myRequests.filter(r => r.status === 'delivered').length;
-  const myBorrowed = mockBorrowedItems.filter(b => b.userId === '2' && b.status === 'borrowed');
-  const totalCatalog = mockMaterials.length;
+  const myBorrowed = myRequests.filter(r => r.status === 'borrowed');
+  const totalCatalog = materials.length;
 
   const stats = [
     {
@@ -34,7 +84,7 @@ export function Dashboard() {
       value: myBorrowed.length,
       subLabel: 'à retourner',
       icon: RotateCcw,
-      link: '/portal/my-borrowed',
+      link: '/portal/my-requests',
       color: 'violet',
     },
     {
@@ -58,9 +108,14 @@ export function Dashboard() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-background">
-      <Header title="Bienvenue, Badr" />
+      <Header title={`Bienvenue, ${user?.name || 'Utilisateur'}`} />
 
-      <div className="flex-1 p-6 space-y-6 overflow-auto">
+      <motion.div 
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+        className="flex-1 p-6 space-y-6 overflow-auto"
+      >
         {/* Stats Grid — Admin-style cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
           {stats.map((stat, i) => (
@@ -120,9 +175,9 @@ export function Dashboard() {
                 <div className="w-8 h-8 rounded-xl bg-violet-500 text-white flex items-center justify-center shadow-sm shadow-violet-200">
                   <RotateCcw className="w-4 h-4" />
                 </div>
-                <h3 className="text-[13px] font-bold text-foreground">Retours à effectuer</h3>
+                <h3 className="text-[13px] font-bold text-foreground">Matériels empruntés</h3>
               </div>
-              <Link to="/portal/my-borrowed" className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium hover:text-violet-500 transition-colors">
+              <Link to="/portal/my-requests" className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium hover:text-violet-500 transition-colors">
                 Tout voir →
               </Link>
             </div>
@@ -137,9 +192,9 @@ export function Dashboard() {
                   {myBorrowed.map(item => (
                     <div key={item.id} className="group/item flex items-center justify-between p-3 rounded-xl border border-border/50 hover:border-violet-200 hover:bg-violet-50/30 transition-all">
                       <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-lg bg-violet-50 border border-violet-100 flex items-center justify-center group-hover/item:bg-violet-100 transition-colors">
-                          <RotateCcw className="w-4 h-4 text-violet-500" />
-                        </div>
+                    <div className="w-9 h-9 rounded-lg bg-violet-50 border border-violet-100 dark:bg-violet-900/20 dark:border-violet-900/30 flex items-center justify-center group-hover/item:bg-violet-100 transition-colors">
+                      <RotateCcw className="w-4 h-4 text-violet-500 dark:text-violet-400" />
+                    </div>
                         <div>
                           <p className="text-[13px] font-medium text-foreground group-hover/item:text-violet-700 transition-colors">{item.materialName}</p>
                           <div className="flex items-center gap-2 mt-0.5">
@@ -150,7 +205,7 @@ export function Dashboard() {
                           </div>
                         </div>
                       </div>
-                      <span className="text-[10px] font-black uppercase text-violet-700 bg-violet-100 px-2 py-1 rounded-md border border-violet-200/50">À retourner</span>
+                      <span className="text-[10px] font-black uppercase text-violet-700 dark:text-violet-300 bg-violet-100 dark:bg-violet-900/30 px-2 py-1 rounded-md border border-violet-200/50 dark:border-violet-800/50">En possession</span>
                     </div>
                   ))}
                 </div>
@@ -205,7 +260,8 @@ export function Dashboard() {
             </CardContent>
           </Card>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 }
+

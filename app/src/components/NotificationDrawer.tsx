@@ -1,372 +1,472 @@
-import { useState, useMemo } from 'react';
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet';
-import {
-  AlertTriangle,
-  Package,
-  CalendarClock,
-  CheckCheck,
-  Bell,
-  BellOff,
-  Clock,
-  ArrowRight,
-  X,
-} from 'lucide-react';
-import { mockMaterials, mockBorrowedItems } from '@/data/mockData';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import { X, Send, UserCircle, Bot, MessageSquare, Info, ChevronLeft, Trash2, Check } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
+import { motion, AnimatePresence } from 'framer-motion';
+import api from '@/lib/api';
+import { toast } from 'sonner';
 
-// ── Notification Types ──────────────────────────────────────────────
-
-export type NotificationType = 'stock_critical' | 'stock_low' | 'overdue' | 'due_soon' | 'info';
-
-export interface AppNotification {
+interface Message {
   id: string;
-  type: NotificationType;
-  title: string;
-  message: string;
-  timestamp: Date;
-  read: boolean;
-  meta?: {
-    itemName?: string;
-    userName?: string;
-    daysOverdue?: number;
-    daysLeft?: number;
-    quantity?: number;
-    minQuantity?: number;
-  };
+  content: string;
+  sender_role: 'user' | 'admin';
+  user_id: string;
+  created_at: string;
 }
 
-// ── Generate notifications from real data ───────────────────────────
-
-function generateNotifications(): AppNotification[] {
-  const notifications: AppNotification[] = [];
-  const now = new Date();
-
-  mockMaterials.forEach((item) => {
-    if (item.quantity <= item.minQuantity) {
-      const isCritical = item.quantity === 0;
-      notifications.push({
-        id: `stock-${item.id}`,
-        type: isCritical ? 'stock_critical' : 'stock_low',
-        title: isCritical ? 'Rupture de stock' : 'Stock bas',
-        message: isCritical
-          ? `${item.name} est en rupture totale de stock.`
-          : `${item.name} — ${item.quantity} ${item.unit}${item.quantity > 1 ? 's' : ''} restant${item.quantity > 1 ? 's' : ''} (seuil: ${item.minQuantity}).`,
-        timestamp: new Date(now.getTime() - Math.random() * 3600000 * 4),
-        read: false,
-        meta: { itemName: item.name, quantity: item.quantity, minQuantity: item.minQuantity },
-      });
-    }
-  });
-
-  mockBorrowedItems
-    .filter((b) => b.status === 'borrowed')
-    .forEach((item) => {
-      const expected = new Date(item.expectedReturnDate);
-      const diffMs = expected.getTime() - now.getTime();
-      const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-
-      if (diffDays < 0) {
-        notifications.push({
-          id: `overdue-${item.id}`,
-          type: 'overdue',
-          title: 'Retour en retard',
-          message: `${item.materialName} emprunté par ${item.userName} — ${Math.abs(diffDays)} jour${Math.abs(diffDays) > 1 ? 's' : ''} de retard.`,
-          timestamp: expected,
-          read: false,
-          meta: { itemName: item.materialName, userName: item.userName, daysOverdue: Math.abs(diffDays) },
-        });
-      } else if (diffDays <= 3) {
-        notifications.push({
-          id: `due-soon-${item.id}`,
-          type: 'due_soon',
-          title: 'Retour imminent',
-          message: `${item.materialName} emprunté par ${item.userName} — ${diffDays === 0 ? "retour aujourd'hui" : `${diffDays} jour${diffDays > 1 ? 's' : ''} restant${diffDays > 1 ? 's' : ''}`}.`,
-          timestamp: new Date(now.getTime() - Math.random() * 3600000 * 2),
-          read: false,
-          meta: { itemName: item.materialName, userName: item.userName, daysLeft: diffDays },
-        });
-      }
-    });
-
-  return notifications.sort((a, b) => {
-    if (a.read !== b.read) return a.read ? 1 : -1;
-    return b.timestamp.getTime() - a.timestamp.getTime();
-  });
+interface Conversation {
+  id: string;
+  name: string;
+  last_message: string;
+  last_message_time: string;
+  unread_count: number;
 }
 
-// ── Time formatting ─────────────────────────────────────────────────
-
-function timeAgo(date: Date): string {
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-
-  if (diffMins < 1) return "À l'instant";
-  if (diffMins < 60) return `Il y a ${diffMins} min`;
-  if (diffHours < 24) return `Il y a ${diffHours}h`;
-  if (diffDays < 7) return `Il y a ${diffDays}j`;
-  return date.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' });
-}
-
-// ── Visual config per type ──────────────────────────────────────────
-
-const typeConfig: Record<
-  NotificationType,
-  {
-    icon: typeof AlertTriangle;
-    iconClass: string;
-    dotClass: string;
-    bgClass: string;
-    borderClass: string;
-    label: string;
-    labelColor: string;
-  }
-> = {
-  stock_critical: {
-    icon: AlertTriangle,
-    iconClass: 'text-red-500',
-    dotClass: 'bg-red-500',
-    bgClass: 'bg-red-50',
-    borderClass: 'border-l-red-500',
-    label: 'CRITIQUE',
-    labelColor: 'text-red-600',
-  },
-  stock_low: {
-    icon: Package,
-    iconClass: 'text-amber-500',
-    dotClass: 'bg-amber-400',
-    bgClass: 'bg-amber-50',
-    borderClass: 'border-l-amber-400',
-    label: 'STOCK BAS',
-    labelColor: 'text-amber-600',
-  },
-  overdue: {
-    icon: CalendarClock,
-    iconClass: 'text-red-600',
-    dotClass: 'bg-red-500',
-    bgClass: 'bg-red-50',
-    borderClass: 'border-l-red-500',
-    label: 'EN RETARD',
-    labelColor: 'text-red-600',
-  },
-  due_soon: {
-    icon: Clock,
-    iconClass: 'text-violet-500',
-    dotClass: 'bg-violet-400',
-    bgClass: 'bg-violet-50',
-    borderClass: 'border-l-violet-400',
-    label: 'IMMINENT',
-    labelColor: 'text-violet-600',
-  },
-  info: {
-    icon: Bell,
-    iconClass: 'text-blue-500',
-    dotClass: 'bg-blue-400',
-    bgClass: 'bg-blue-50',
-    borderClass: 'border-l-blue-400',
-    label: 'INFO',
-    labelColor: 'text-blue-600',
-  },
-};
-
-// ── Filter tabs ─────────────────────────────────────────────────────
-
-type FilterTab = 'all' | 'stock' | 'returns';
-
-// ── Component ───────────────────────────────────────────────────────
-
-interface NotificationDrawerProps {
+interface ChatDrawerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  sidebarOffset?: number;
 }
 
-export function NotificationDrawer({ open, onOpenChange }: NotificationDrawerProps) {
-  const [notifications, setNotifications] = useState<AppNotification[]>(generateNotifications);
-  const [activeTab, setActiveTab] = useState<FilterTab>('all');
+export function NotificationDrawer({ open, onOpenChange, sidebarOffset = 288 }: ChatDrawerProps) {
+  const { user } = useAuth();
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [selectedUser, setSelectedUser] = useState<Conversation | null>(null);
+  const [view, setView] = useState<'list' | 'chat'>('chat');
+  const [inputValue, setInputValue] = useState('');
+  const [loading, setLoading] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const unreadCount = useMemo(() => notifications.filter((n) => !n.read).length, [notifications]);
+  useEffect(() => {
+    if (!open) {
+      setSelectedUser(null);
+      if (user?.role === 'admin') {
+        setView('list');
+      }
+    }
+  }, [open, user?.role]);
 
-  const filtered = useMemo(() => {
-    if (activeTab === 'stock') return notifications.filter((n) => n.type === 'stock_critical' || n.type === 'stock_low');
-    if (activeTab === 'returns') return notifications.filter((n) => n.type === 'overdue' || n.type === 'due_soon');
-    return notifications;
-  }, [notifications, activeTab]);
+  const fetchMessages = useCallback(async (targetUserId?: string) => {
+    try {
+      setLoading(true);
+      const userId = targetUserId || user?.id;
+      const params = userId ? { user_id: userId } : {};
+      const response = await api.get('/messages', { params });
+      setMessages(response.data);
+      
+      // Mark as read
+      if (userId) {
+        api.post('/messages/read', { user_id: userId }).then(() => {
+          window.dispatchEvent(new Event('messages-read'));
+        });
+        // Dispatch immediately for instant UI feedback
+        window.dispatchEvent(new Event('messages-read'));
+      }
+    } catch (error) {
+      console.error('Failed to fetch messages:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [user?.id]);
 
-  const markAsRead = (id: string) => {
-    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
+  const fetchConversations = useCallback(async () => {
+    try {
+      setLoading(true);
+      const response = await api.get('/conversations');
+      setConversations(response.data);
+    } catch (error) {
+      console.error('Failed to fetch conversations:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+
+    if (open) {
+      if (user?.role === 'admin') {
+        if (selectedUser) {
+          setView('chat');
+          fetchMessages(selectedUser.id);
+          interval = setInterval(() => fetchMessages(selectedUser.id), 5000);
+        } else {
+          setView('list');
+          fetchConversations();
+          interval = setInterval(fetchConversations, 5000);
+        }
+      } else {
+        setView('chat');
+        fetchMessages();
+        interval = setInterval(() => fetchMessages(), 5000);
+      }
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [open, user?.role, selectedUser, fetchMessages, fetchConversations]);
+
+  useEffect(() => {
+    if (open && view === 'chat') {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [open, view, messages]);
+
+  const handleSend = async () => {
+    if (!inputValue.trim()) return;
+    
+    const content = inputValue.trim();
+    setInputValue('');
+
+    // Optimistic Update
+    const tempId = Date.now().toString();
+    const tempMsg: Message = {
+      id: tempId,
+      content,
+      sender_role: user?.role === 'admin' ? 'admin' : 'user',
+      user_id: (user?.role === 'admin' ? selectedUser?.id : user?.id) || '',
+      created_at: new Date().toISOString(),
+      // @ts-ignore - added for UI feedback
+      isSending: true
+    };
+
+    setMessages(prev => [...prev, tempMsg]);
+
+    try {
+      const payload: any = { 
+        content,
+        sender_role: user?.role === 'admin' ? 'admin' : 'user'
+      };
+
+      if (user?.role === 'admin' && selectedUser) {
+        payload.user_id = selectedUser.id;
+      } else if (user) {
+        payload.user_id = user.id;
+      }
+
+      const response = await api.post('/messages', payload);
+      setMessages(prev => prev.map(m => m.id === tempId ? response.data : m));
+    } catch (error) {
+      setMessages(prev => prev.filter(m => m.id !== tempId));
+      toast.error('Erreur lors de l\'envoi du message');
+      console.error('Failed to send message:', error);
+    }
   };
 
-  const markAllRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+  const handleClearChat = async () => {
+    if (!confirm('Êtes-vous sûr de vouloir effacer toute la conversation ?')) return;
+
+    try {
+      const userId = selectedUser?.id || user?.id;
+      if (!userId) return;
+
+      await api.delete('/messages/clear', { data: { user_id: userId } });
+      setMessages([]);
+      toast.success('Conversation effacée');
+    } catch (error) {
+      toast.error('Erreur lors de la suppression de la conversation');
+      console.error('Failed to clear chat:', error);
+    }
   };
 
-  const dismissNotification = (id: string) => {
-    setNotifications((prev) => prev.filter((n) => n.id !== id));
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
   };
 
-  const tabs: { key: FilterTab; label: string; count: number }[] = [
-    { key: 'all', label: 'Tout', count: notifications.length },
-    { key: 'stock', label: 'Stock', count: notifications.filter((n) => n.type === 'stock_critical' || n.type === 'stock_low').length },
-    { key: 'returns', label: 'Retours', count: notifications.filter((n) => n.type === 'overdue' || n.type === 'due_soon').length },
-  ];
+  const formatTime = (dateString: string): string => {
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    } catch (e) {
+      return '';
+    }
+  };
 
-  return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        side="left"
-        className="w-[380px] sm:max-w-[380px] p-0 border-r border-border bg-card flex flex-col gap-0 shadow-2xl lg:left-[288px]"
-        style={{ animationDuration: '350ms' } as React.CSSProperties}
-      >
-        {/* ─── Header ─── */}
-        <SheetHeader className="px-5 pt-5 pb-4 bg-card space-y-0">
-          {/* Title row */}
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2.5">
-              <div className="relative">
-                <Bell className="w-5 h-5 text-foreground" />
-                {unreadCount > 0 && (
-                  <span className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full ring-2 ring-white" />
-                )}
-              </div>
-              <SheetTitle className="text-[15px] font-bold text-foreground tracking-tight">
-                Notifications
-              </SheetTitle>
-              {unreadCount > 0 && (
-                <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full">
-                  {unreadCount}
-                </span>
-              )}
-            </div>
-            {unreadCount > 0 && (
-              <button
-                onClick={markAllRead}
-                className="flex items-center gap-1 text-[11px] font-semibold text-muted-foreground hover:text-blue-600 transition-colors"
-              >
-                <CheckCheck className="w-3.5 h-3.5" />
-                Tout lire
-              </button>
-            )}
-          </div>
+  return createPortal(
+    <AnimatePresence>
+      {open && (
+        <>
+          <motion.div
+            key="backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] bg-transparent"
+            onClick={() => onOpenChange(false)}
+          />
 
-          {/* Segmented tabs */}
-          <div className="flex bg-muted rounded-lg p-0.5 gap-0.5">
-            {tabs.map((tab) => (
-              <button
-                key={tab.key}
-                onClick={() => setActiveTab(tab.key)}
-                className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-[11px] font-semibold transition-all duration-200 ${
-                  activeTab === tab.key
-                    ? 'bg-card text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                {tab.label}
-                {tab.count > 0 && (
-                  <span
-                    className={`text-[9px] font-black px-1 py-0.5 rounded min-w-[15px] text-center leading-none ${
-                      activeTab === tab.key ? 'bg-muted text-muted-foreground' : 'bg-slate-200/70 text-muted-foreground'
-                    }`}
-                  >
-                    {tab.count}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
+          <div 
+            style={{ left: sidebarOffset }}
+            className="fixed top-0 bottom-0 z-[70] w-[400px] max-w-[calc(100vw-80px)] overflow-hidden pointer-events-none"
+          >
+            <motion.div
+              key="panel"
+              initial={{ x: '-100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '-100%' }}
+              transition={{ type: 'spring', stiffness: 320, damping: 32 }}
+              className="w-full h-full bg-card border-r border-border flex flex-col pointer-events-auto shadow-2xl"
+            >
+            <div className="px-6 pt-8 pb-5 bg-background/80 backdrop-blur-xl relative overflow-hidden shrink-0 border-b border-border/40">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 blur-[80px] rounded-full -mr-16 -mt-16" />
+              <div className="absolute bottom-0 left-0 w-24 h-24 bg-blue-500/5 blur-[60px] rounded-full -ml-12 -mb-12" />
 
-          {/* Divider */}
-          <div className="h-px bg-muted mt-4 -mx-5" />
-        </SheetHeader>
-
-        {/* ─── Notification List ─── */}
-        <div className="flex-1 h-0 overflow-y-auto">
-          {filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-muted-foreground pb-16">
-              <div className="w-14 h-14 rounded-2xl bg-muted flex items-center justify-center mb-4">
-                <BellOff className="w-7 h-7 text-slate-300" />
-              </div>
-              <p className="text-sm font-semibold text-muted-foreground">Aucune notification</p>
-              <p className="text-xs mt-1 text-muted-foreground">Tout est sous contrôle</p>
-            </div>
-          ) : (
-            <div className="divide-y divide-slate-100">
-              {filtered.map((notification) => {
-                const config = typeConfig[notification.type];
-                const Icon = config.icon;
-
-                return (
-                  <div
-                    key={notification.id}
-                    onClick={() => markAsRead(notification.id)}
-                    className={`group relative flex gap-3.5 px-5 py-4 cursor-pointer transition-colors duration-150 ${
-                      notification.read
-                        ? 'bg-card hover:bg-muted/60'
-                        : 'bg-blue-50/20 hover:bg-blue-50/40'
-                    }`}
-                  >
-                    {/* Unread left strip */}
-                    {!notification.read && (
-                      <div className="absolute left-0 top-5 bottom-5 w-[3px] bg-blue-500 rounded-r-full" />
-                    )}
-
-                    {/* Dismiss button */}
-                    <button
-                      onClick={(e) => { e.stopPropagation(); dismissNotification(notification.id); }}
-                      className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity w-5 h-5 rounded flex items-center justify-center hover:bg-slate-200"
+              <div className="flex items-center justify-between relative z-10">
+                <div className="flex items-center gap-4">
+                  {view === 'chat' && user?.role === 'admin' && (
+                    <button 
+                      onClick={() => {
+                        setView('list');
+                        setSelectedUser(null);
+                        fetchConversations();
+                      }}
+                      className="p-2 rounded-xl bg-muted/50 hover:bg-muted text-muted-foreground transition-all duration-300 hover:scale-105 active:scale-95 group"
                     >
-                      <X className="w-3 h-3 text-muted-foreground" />
+                      <ChevronLeft className="w-5 h-5 group-hover:-translate-x-0.5 transition-transform" />
                     </button>
-
-                    {/* Icon */}
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${notification.read ? 'bg-muted' : config.bgClass}`}>
-                      <Icon className={`w-4 h-4 ${notification.read ? 'text-muted-foreground' : config.iconClass}`} />
+                  )}
+                  <div className="relative">
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-600 flex items-center justify-center shrink-0 shadow-lg shadow-indigo-500/20 border border-white/20">
+                       <MessageSquare className="w-6 h-6 text-white" />
                     </div>
-
-                    {/* Content */}
-                    <div className="flex-1 min-w-0 pr-5">
-                      <div className="flex items-center justify-between gap-2 mb-0.5">
-                        <span className={`text-[10px] font-black uppercase tracking-widest ${notification.read ? 'text-muted-foreground' : config.labelColor}`}>
-                          {config.label}
-                        </span>
-                        <span className="text-[10px] text-muted-foreground shrink-0">
-                          {timeAgo(notification.timestamp)}
-                        </span>
-                      </div>
-
-                      <p className={`text-[13px] leading-snug ${notification.read ? 'font-medium text-muted-foreground' : 'font-semibold text-foreground'}`}>
-                        {notification.title}
-                      </p>
-                      <p className="text-[12px] text-muted-foreground mt-0.5 line-clamp-2 leading-relaxed">
-                        {notification.message}
-                      </p>
-
-                      {!notification.read && (notification.type === 'stock_critical' || notification.type === 'stock_low' || notification.type === 'overdue' || notification.type === 'due_soon') && (
-                        <button
-                          onClick={(e) => e.stopPropagation()}
-                          className={`mt-2 inline-flex items-center gap-1 text-[11px] font-semibold transition-colors ${
-                            notification.type === 'stock_critical' || notification.type === 'stock_low'
-                              ? 'text-amber-600 hover:text-amber-800'
-                              : 'text-violet-600 hover:text-violet-800'
-                          }`}
-                        >
-                          {notification.type === 'stock_critical' || notification.type === 'stock_low' ? 'Voir le matériel' : 'Voir la demande'}
-                          <ArrowRight className="w-3 h-3" />
-                        </button>
-                      )}
+                    <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 border-2 border-white dark:border-[#1A1A1A] rounded-full shadow-sm" />
+                  </div>
+                  <div className="min-w-0">
+                    <h2 className="text-sm font-black text-foreground leading-none mb-1.5 uppercase tracking-tighter truncate">
+                      {view === 'list' 
+                        ? 'Communications' 
+                        : (user?.role === 'admin' ? selectedUser?.name : 'Assistant Stock')}
+                    </h2>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
+                      <span className="text-[9px] font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-widest">
+                        Actif maintenant
+                      </span>
                     </div>
                   </div>
-                );
-              })}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {view === 'chat' && messages.length > 0 && (
+                    <button
+                      onClick={handleClearChat}
+                      className="p-2.5 rounded-xl hover:bg-red-500/10 text-muted-foreground hover:text-red-500 transition-all duration-300 active:scale-95 group/trash"
+                      title="Effacer la conversation"
+                    >
+                      <Trash2 className="w-4 h-4 transition-transform group-hover/trash:rotate-12" />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => onOpenChange(false)}
+                    className="p-2.5 rounded-xl hover:bg-muted text-muted-foreground transition-all duration-300 active:scale-95"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
             </div>
-          )}
-        </div>
-      </SheetContent>
-    </Sheet>
+
+            <div className="flex-1 overflow-y-auto bg-muted/5 relative custom-scrollbar">
+              {view === 'list' ? (
+                <div className="p-4 space-y-2">
+                  {conversations.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-24 px-8 text-center">
+                      <div className="w-20 h-20 bg-muted/50 rounded-[32px] flex items-center justify-center mb-6 border border-border/40 relative">
+                        <MessageSquare className="w-8 h-8 text-muted-foreground/30" />
+                        <div className="absolute inset-0 bg-indigo-500/5 blur-2xl rounded-full" />
+                      </div>
+                      <h3 className="text-sm font-black text-foreground uppercase tracking-tight mb-2">Aucune conversation</h3>
+                      <p className="text-[11px] text-muted-foreground/60 leading-relaxed font-medium">
+                        Les messages des utilisateurs apparaîtront ici dès qu'ils vous contacteront.
+                      </p>
+                    </div>
+                  ) : (
+                    conversations.map((conv) => (
+                      <button
+                        key={conv.id}
+                        onClick={() => {
+                          setSelectedUser(conv);
+                          setConversations(prev => prev.map(c => 
+                            c.id === conv.id ? { ...c, unread_count: 0 } : c
+                          ));
+                        }}
+                        className="w-full p-4 flex items-center gap-4 hover:bg-muted/50 transition-all duration-300 rounded-[24px] group border border-transparent hover:border-border/40 hover:shadow-lg hover:shadow-black/5"
+                      >
+                        <div className="relative">
+                          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-muted to-muted/50 flex items-center justify-center shrink-0 border border-border group-hover:border-indigo-500/30 transition-colors overflow-hidden">
+                            <UserCircle className="w-7 h-7 text-muted-foreground/60 group-hover:text-indigo-500 transition-colors" />
+                          </div>
+                          <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 border-2 border-white dark:border-[#1A1A1A] rounded-full shadow-sm" />
+                        </div>
+                        
+                        <div className="flex-1 text-left min-w-0">
+                          <div className="flex justify-between items-baseline mb-1">
+                            <h4 className="font-black text-[14px] text-foreground truncate group-hover:text-indigo-600 transition-colors uppercase tracking-tight">
+                              {conv.name}
+                            </h4>
+                            <span className="text-[10px] font-bold text-muted-foreground/40 whitespace-nowrap ml-2">
+                              {conv.last_message_time ? formatTime(conv.last_message_time) : ''}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-[12px] text-muted-foreground/70 truncate leading-none">
+                              {conv.last_message || 'Nouvelle conversation'}
+                            </p>
+                            {conv.unread_count > 0 && (
+                              <div className="w-2.5 h-2.5 rounded-full bg-indigo-500 shadow-[0_0_12px_rgba(99,102,241,0.6)] animate-pulse shrink-0" />
+                            )}
+                          </div>
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              ) : (
+                <div className="p-4 space-y-4">
+                  {/* Greeting for normal users */}
+                  {user?.role !== 'admin' && messages.length === 0 && (
+                    <div className="bg-indigo-500/10 border border-indigo-500/20 text-indigo-700 dark:text-indigo-400 p-4 rounded-2xl text-xs flex gap-3 mb-6">
+                      <div className="shrink-0 mt-0.5">
+                        <Bot className="w-4 h-4" />
+                      </div>
+                      <p className="leading-relaxed font-medium">
+                        Bonjour ! Vous discutez avec l'administrateur. Laissez votre message et nous vous répondrons dès que possible.
+                      </p>
+                    </div>
+                  )}
+
+                  {(() => {
+                    const groups: { [key: string]: Message[] } = {};
+                    messages.forEach(msg => {
+                      const date = new Date(msg.created_at).toLocaleDateString('fr-FR', { 
+                        day: 'numeric', 
+                        month: 'long', 
+                        year: 'numeric' 
+                      });
+                      const today = new Date().toLocaleDateString('fr-FR', { 
+                        day: 'numeric', 
+                        month: 'long', 
+                        year: 'numeric' 
+                      });
+                      const yesterday = new Date(Date.now() - 86400000).toLocaleDateString('fr-FR', { 
+                        day: 'numeric', 
+                        month: 'long', 
+                        year: 'numeric' 
+                      });
+                      
+                      let label = date;
+                      if (date === today) label = "Aujourd'hui";
+                      else if (date === yesterday) label = "Hier";
+                      
+                      if (!groups[label]) groups[label] = [];
+                      groups[label].push(msg);
+                    });
+
+                    return Object.entries(groups).map(([date, groupMessages]) => (
+                      <div key={date} className="space-y-6">
+                        <div className="flex justify-center my-6 relative">
+                          <div className="absolute inset-0 flex items-center">
+                            <div className="w-full border-t border-border/40"></div>
+                          </div>
+                          <span className="relative px-3 py-1 bg-background text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground/60 rounded-full border border-border/40 backdrop-blur-md">
+                            {date}
+                          </span>
+                        </div>
+
+                        {groupMessages.map((msg) => {
+                          const isMe = msg.sender_role === user?.role;
+                          // @ts-ignore
+                          const isSending = msg.isSending;
+                          return (
+                            <motion.div
+                              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                              animate={{ opacity: 1, scale: 1, y: 0 }}
+                              key={msg.id}
+                              className={`flex gap-3 ${isMe ? 'flex-row-reverse' : 'flex-row'} items-end`}
+                            >
+                              <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 border border-border/50 shadow-sm ${
+                                isMe ? 'bg-indigo-50 dark:bg-indigo-900/30' : 'bg-background'
+                              }`}>
+                                {msg.sender_role === 'admin' ? (
+                                  <Bot className={`w-3.5 h-3.5 ${isMe ? 'text-indigo-600' : 'text-muted-foreground'}`} />
+                                ) : (
+                                  <UserCircle className={`w-3.5 h-3.5 ${isMe ? 'text-indigo-600' : 'text-muted-foreground'}`} />
+                                )}
+                              </div>
+                              <div className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} max-w-[80%]`}>
+                                <div className={`group relative px-4 py-2.5 rounded-[20px] text-[13px] leading-relaxed transition-all duration-300 ${
+                                  isMe 
+                                    ? `bg-gradient-to-br from-indigo-500 to-indigo-700 text-white shadow-lg shadow-indigo-500/20 rounded-br-[4px] ${isSending ? 'opacity-70 animate-pulse' : ''}` 
+                                    : 'bg-white dark:bg-[#1A1A1A] border border-border/60 text-foreground shadow-sm rounded-bl-[4px] hover:border-indigo-500/30'
+                                }`}>
+                                  {msg.content}
+                                  
+                                  {isSending && (
+                                    <div className="absolute -left-6 bottom-1">
+                                      <div className="flex gap-1">
+                                        <span className="w-1 h-1 bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
+                                        <span className="w-1 h-1 bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
+                                        <span className="w-1 h-1 bg-indigo-400 rounded-full animate-bounce" />
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2 mt-1 px-1">
+                                  <span className="text-[9px] font-bold text-muted-foreground/50 uppercase tracking-widest">
+                                    {formatTime(msg.created_at)}
+                                  </span>
+                                  {isMe && !isSending && (
+                                    <Check className="w-2.5 h-2.5 text-indigo-500" />
+                                  )}
+                                </div>
+                              </div>
+                            </motion.div>
+                          );
+                        })}
+                      </div>
+                    ));
+                  })()}
+                  <div ref={messagesEndRef} className="h-4" />
+                </div>
+              )}
+            </div>
+
+            {view === 'chat' && (
+              <div className="p-5 bg-background relative z-10 border-t border-border/40">
+                 <div className="flex items-end gap-3 p-2.5 bg-white dark:bg-[#1A1A1A] rounded-[24px] border border-border/60 shadow-sm focus-within:border-indigo-500/50 focus-within:ring-4 focus-within:ring-indigo-500/5 transition-all duration-300">
+                   <textarea
+                     value={inputValue}
+                     onChange={(e) => setInputValue(e.target.value)}
+                     onKeyDown={handleKeyDown}
+                     placeholder="Votre message..."
+                     className="flex-1 bg-transparent border-none focus:outline-none resize-none min-h-[40px] max-h-[140px] text-[13px] py-2 px-3 leading-relaxed custom-scrollbar"
+                     rows={1}
+                   />
+                   <button
+                     onClick={handleSend}
+                     disabled={!inputValue.trim() || loading}
+                     className="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-600 hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-100 flex items-center justify-center text-white shrink-0 shadow-lg shadow-indigo-500/20 transition-all duration-300 group"
+                   >
+                     <Send className="w-4 h-4 ml-0.5 group-hover:rotate-12 transition-transform" />
+                   </button>
+                 </div>
+                 <div className="flex justify-center mt-3">
+                   <span className="text-[9px] font-black text-muted-foreground/30 uppercase tracking-[0.2em] animate-pulse">
+                     Appuyez sur Entrée pour envoyer
+                   </span>
+                 </div>
+              </div>
+            )}
+            </motion.div>
+          </div>
+        </>
+      )}
+    </AnimatePresence>,
+    document.body
   );
 }

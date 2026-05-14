@@ -10,12 +10,14 @@ lerna-debug.log*
 # Node modules
 node_modules/
 app/node_modules/
+backend/vendor/
 
 # Build outputs
 dist/
 app/dist/
 build/
 app/build/
+backend/public/build/
 
 # Environment variables
 .env
@@ -25,6 +27,7 @@ app/build/
 .env.production.local
 app/.env
 app/.env.local
+backend/.env
 
 # Editor folders
 .vscode/

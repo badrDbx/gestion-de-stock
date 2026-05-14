@@ -10,45 +10,44 @@ interface HeaderProps {
 
 export function Header({ title, subtitle, actions, primaryAction }: HeaderProps) {
   return (
-    <header className="sticky top-0 z-40 w-full border-b border-border bg-background/95 backdrop-blur-xl shrink-0 h-[61px] flex items-center">
-      <div className="px-6 w-full flex items-center">
-        <div className="flex items-center justify-between gap-4 w-full">
+    <header className="sticky top-0 z-[49] w-full border-b border-border/40 bg-white/60 dark:bg-slate-950/60 backdrop-blur-2xl shrink-0 h-[72px] flex items-center transition-all duration-500">
+      <div className="px-8 w-full flex items-center">
+        <div className="flex items-center justify-between gap-6 w-full">
           {/* Left: Title & Subtitle */}
           <div className="flex-1 min-w-0">
-            <h1 className="text-xl font-bold text-foreground tracking-tight truncate">{title}</h1>
+            <h1 className="text-xl font-black text-foreground tracking-tight truncate italic bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text">
+              {title}
+            </h1>
             {subtitle && (
-              <p className="text-muted-foreground text-sm mt-0.5 truncate">{subtitle}</p>
+              <p className="text-muted-foreground/80 text-[11px] font-bold uppercase tracking-widest mt-1 truncate">
+                {subtitle}
+              </p>
             )}
           </div>
 
           {/* Center/Right: Actions & Switcher */}
-          <div className="flex items-center gap-4 shrink-0">
+          <div className="flex items-center gap-6 shrink-0">
             {actions && (
-              <div className="hidden lg:flex items-center gap-3">
+              <div className="hidden xl:flex items-center gap-4">
                 {actions}
               </div>
             )}
             
             {primaryAction && (
-              <div className="hidden sm:block">
-                {primaryAction}
+              <div className="hidden md:block">
+                <div className="transition-transform duration-300 hover:scale-[1.02] active:scale-[0.98]">
+                  {primaryAction}
+                </div>
               </div>
             )}
 
-
+            <div className="h-8 w-[1px] bg-border/40 mx-1 hidden sm:block" />
             
-            <ThemeToggle />
+            <div className="transition-transform duration-300 hover:rotate-12">
+              <ThemeToggle />
+            </div>
           </div>
         </div>
-
-        {/* Mobile/Tablet Actions (Below title on small screens) */}
-        {(actions || primaryAction) && (
-          <div className="lg:hidden flex flex-wrap items-center gap-2 mt-4 pt-4 border-t border-border">
-            {actions}
-            <div className="flex-1" />
-            {primaryAction}
-          </div>
-        )}
       </div>
     </header>
   );
